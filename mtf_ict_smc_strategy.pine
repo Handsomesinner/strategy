@@ -227,8 +227,7 @@ if array.size(ob_top) > 0
                     box.set_bgcolor(bx, color.new(color.gray, 90))
                     box.set_border_color(bx, color.new(color.gray, 60))
             // Tapped (1H price entered the OB zone)
-            else if (d == 1 and low <= t and low >= b and d == w_bias) or
-                    (d == -1 and high >= b and high <= t and d == w_bias)
+            else if (d == 1 and low <= t and low >= b and d == w_bias) or (d == -1 and high >= b and high <= t and d == w_bias)
                 ob_tapped  := true
                 ob_tap_top := t
                 ob_tap_bot := b
@@ -300,13 +299,9 @@ var float ep_sl  = na
 var float ep_tp  = na
 float sl_buf     = i_sl_buf * syminfo.mintick
 
-bool long_signal  = w_bias == 1  and d_struct == 1  and ob_tapped and ob_tap_dir == 1  and
-                    h4_conf == 1  and h1_bull_intent and m5_bull_sweep and session_ok and
-                    strategy.position_size == 0
+bool long_signal  = w_bias == 1  and d_struct == 1  and ob_tapped and ob_tap_dir == 1  and h4_conf == 1  and h1_bull_intent and m5_bull_sweep and session_ok and strategy.position_size == 0
 
-bool short_signal = w_bias == -1 and d_struct == -1 and ob_tapped and ob_tap_dir == -1 and
-                    h4_conf == -1 and h1_bear_intent and m5_bear_sweep and session_ok and
-                    strategy.position_size == 0
+bool short_signal = w_bias == -1 and d_struct == -1 and ob_tapped and ob_tap_dir == -1 and h4_conf == -1 and h1_bear_intent and m5_bear_sweep and session_ok and strategy.position_size == 0
 
 if long_signal
     ep_sl := ob_tap_bot - sl_buf
@@ -364,10 +359,8 @@ if i_show_h4 and barstate.islast
                        color=color.new(color.gray,   60), width=1, style=line.style_dotted)
 
 // Session background
-bool in_london = f_in_session() and
-                 (hour(time, "UTC") * 60 + minute(time, "UTC")) < (i_ny_open_h * 60 + i_ny_open_m)
-bool in_ny     = f_in_session() and
-                 (hour(time, "UTC") * 60 + minute(time, "UTC")) >= (i_ny_open_h * 60 + i_ny_open_m)
+bool in_london = f_in_session() and (hour(time, "UTC") * 60 + minute(time, "UTC")) < (i_ny_open_h * 60 + i_ny_open_m)
+bool in_ny     = f_in_session() and (hour(time, "UTC") * 60 + minute(time, "UTC")) >= (i_ny_open_h * 60 + i_ny_open_m)
 bgcolor(i_show_ses and in_london ? color.new(color.blue,   94) : na, title="London Session")
 bgcolor(i_show_ses and in_ny     ? color.new(color.orange, 94) : na, title="NY Session")
 
@@ -443,14 +436,10 @@ alertcondition(ob_tapped and not (long_signal or short_signal),
     title="Daily OB Tapped (Pre-Confirmation)",
     message="MTF ICT/SMC: Price tapped a Daily Order Block. Waiting for 1H intent + M5 sweep confirmation.")
 
-alertcondition(strategy.position_size != 0 and
-               ((strategy.position_size > 0 and low <= ep_sl) or
-                (strategy.position_size < 0 and high >= ep_sl)),
+alertcondition(strategy.position_size != 0 and ((strategy.position_size > 0 and low <= ep_sl) or (strategy.position_size < 0 and high >= ep_sl)),
     title="Stop Loss Hit",
     message="MTF ICT/SMC: Stop loss triggered.")
 
-alertcondition(strategy.position_size != 0 and
-               ((strategy.position_size > 0 and high >= ep_tp) or
-                (strategy.position_size < 0 and low <= ep_tp)),
+alertcondition(strategy.position_size != 0 and ((strategy.position_size > 0 and high >= ep_tp) or (strategy.position_size < 0 and low <= ep_tp)),
     title="Take Profit Hit",
     message="MTF ICT/SMC: Take profit reached.")
