@@ -1,0 +1,456 @@
+//@version=6
+strategy("MTF ICT/SMC Strategy [1H]", overlay=true,
+         initial_capital=100000,
+         default_qty_type=strategy.fixed,
+         default_qty_value=1,
+         commission_type=strategy.commission.percent,
+         commission_value=0.05,
+         slippage=2,
+         calc_on_every_tick=false,
+         max_bars_back=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 1: INPUTS
+// ══════════════════════════════════════════════════════════════════════════════
+grp_w   = "Weekly Settings"
+i_w_lb          = input.int(3,    "Weekly Pivot Lookback",    minval=1, maxval=10,           group=grp_w)
+
+grp_d   = "Daily Settings"
+i_d_lb          = input.int(5,    "Daily Pivot Lookback",     minval=1, maxval=10,           group=grp_d)
+i_max_ob        = input.int(10,   "Max OB Boxes on Chart",    minval=3, maxval=30,           group=grp_d)
+
+grp_h4  = "4H Settings"
+i_h4_lb         = input.int(20,   "4H Range Lookback",        minval=5, maxval=50,           group=grp_h4)
+
+grp_1h  = "1H Settings"
+i_atr_period    = input.int(14,   "ATR Period",               minval=5, maxval=50,           group=grp_1h)
+i_intent_mult   = input.float(0.8,"Intent Candle ATR Mult",   minval=0.2, maxval=3.0, step=0.1, group=grp_1h)
+i_sl_buf        = input.int(5,    "SL Buffer (ticks)",        minval=0, maxval=50,            group=grp_1h)
+
+grp_ses = "Session Filter (UTC)"
+i_use_session   = input.bool(true, "Use Session Filter",                                     group=grp_ses)
+i_lon_open_h    = input.int(7,    "London Open Hour",         minval=0, maxval=23,           group=grp_ses)
+i_lon_open_m    = input.int(30,   "London Open Minute",       minval=0, maxval=59,           group=grp_ses)
+i_lon_close_h   = input.int(9,    "London Close Hour",        minval=0, maxval=23,           group=grp_ses)
+i_lon_close_m   = input.int(45,   "London Close Minute",      minval=0, maxval=59,           group=grp_ses)
+i_ny_open_h     = input.int(13,   "NY Open Hour",             minval=0, maxval=23,           group=grp_ses)
+i_ny_open_m     = input.int(30,   "NY Open Minute",           minval=0, maxval=59,           group=grp_ses)
+i_ny_close_h    = input.int(15,   "NY Close Hour",            minval=0, maxval=23,           group=grp_ses)
+i_ny_close_m    = input.int(45,   "NY Close Minute",          minval=0, maxval=59,           group=grp_ses)
+
+grp_vis = "Visuals"
+i_show_w        = input.bool(true, "Show Weekly Levels",                                     group=grp_vis)
+i_show_ob       = input.bool(true, "Show Daily OB Boxes",                                    group=grp_vis)
+i_show_h4       = input.bool(true, "Show 4H Range Lines",                                    group=grp_vis)
+i_show_ses      = input.bool(true, "Show Session Background",                                group=grp_vis)
+i_show_table    = input.bool(true, "Show Info Table",                                        group=grp_vis)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 2: TIMEFRAME GUARD
+// ══════════════════════════════════════════════════════════════════════════════
+if timeframe.period != "60"
+    runtime.error("Run this strategy on a 1-Hour (60m) chart.")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 3: MULTI-TF DATA FETCH (confirmed bars — no repainting)
+// ══════════════════════════════════════════════════════════════════════════════
+[w_o, w_h, w_l, w_c] = request.security(syminfo.tickerid, "W",
+    [open[1], high[1], low[1], close[1]], lookahead=barmerge.lookahead_off)
+w_ph_raw = request.security(syminfo.tickerid, "W",
+    ta.pivothigh(high, i_w_lb, i_w_lb), lookahead=barmerge.lookahead_off)
+w_pl_raw = request.security(syminfo.tickerid, "W",
+    ta.pivotlow(low,  i_w_lb, i_w_lb),  lookahead=barmerge.lookahead_off)
+
+[d_h0, d_l0, d_o0, d_c0,
+ d_h1, d_l1, d_o1, d_c1,
+ d_h2, d_l2, d_o2, d_c2,
+ d_h3, d_l3, d_o3, d_c3] = request.security(syminfo.tickerid, "D",
+    [high[1], low[1], open[1], close[1],
+     high[2], low[2], open[2], close[2],
+     high[3], low[3], open[3], close[3],
+     high[4], low[4], open[4], close[4]],
+    lookahead=barmerge.lookahead_off)
+d_ph_raw = request.security(syminfo.tickerid, "D",
+    ta.pivothigh(high, i_d_lb, i_d_lb), lookahead=barmerge.lookahead_off)
+d_pl_raw = request.security(syminfo.tickerid, "D",
+    ta.pivotlow(low,  i_d_lb, i_d_lb),  lookahead=barmerge.lookahead_off)
+bool new_d_bar = ta.change(request.security(syminfo.tickerid, "D", time)) != 0
+
+[h4_h, h4_l, h4_c] = request.security(syminfo.tickerid, "240",
+    [high[1], low[1], close[1]], lookahead=barmerge.lookahead_off)
+
+[m5_h, m5_l, m5_c] = request.security(syminfo.tickerid, "5",
+    [high[1], low[1], close[1]], lookahead=barmerge.lookahead_off)
+m5_ph_raw = request.security(syminfo.tickerid, "5",
+    ta.pivothigh(high, 3, 3), lookahead=barmerge.lookahead_off)
+m5_pl_raw = request.security(syminfo.tickerid, "5",
+    ta.pivotlow(low,  3, 3),  lookahead=barmerge.lookahead_off)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 4: WEEKLY BIAS
+// ══════════════════════════════════════════════════════════════════════════════
+var float w_sh      = na
+var float w_sl      = na
+var float w_prev_sh = na
+var float w_prev_sl = na
+var int   w_bias    = 0
+
+bool w_new_sh = not na(w_ph_raw) and w_ph_raw != w_sh
+bool w_new_sl = not na(w_pl_raw) and w_pl_raw != w_sl
+
+if w_new_sh
+    w_prev_sh := w_sh
+    w_sh      := w_ph_raw
+if w_new_sl
+    w_prev_sl := w_sl
+    w_sl      := w_pl_raw
+
+// External break: weekly close above/below prior swing
+bool w_ext_bull = not na(w_sh) and w_c > w_sh
+bool w_ext_bear = not na(w_sl) and w_c < w_sl
+
+// Higher high / lower low structure
+bool w_hh = not na(w_sh) and not na(w_prev_sh) and w_sh > w_prev_sh
+bool w_ll = not na(w_sl) and not na(w_prev_sl) and w_sl < w_prev_sl
+
+// Weekly candlestick patterns
+float w_body  = math.abs(w_c - w_o)
+float w_range = w_h - w_l
+float w_upper = w_h - math.max(w_c, w_o)
+float w_lower = math.min(w_c, w_o) - w_l
+bool w_pin_bull = w_lower > 2.0 * w_body and w_lower > w_upper and w_range > 0
+bool w_pin_bear = w_upper > 2.0 * w_body and w_upper > w_lower and w_range > 0
+bool w_eng_bull = w_c > w_o and w_body > math.abs(w_c[1] - w_o[1]) and w_o[1] > w_c[1]
+bool w_eng_bear = w_c < w_o and w_body > math.abs(w_c[1] - w_o[1]) and w_c[1] > w_o[1]
+
+if w_ext_bull or (w_hh and not w_ll) or w_pin_bull or w_eng_bull
+    w_bias := 1
+else if w_ext_bear or (w_ll and not w_hh) or w_pin_bear or w_eng_bear
+    w_bias := -1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 5: DAILY STRUCTURE + ORDER BLOCKS
+// ══════════════════════════════════════════════════════════════════════════════
+var float d_sh      = na
+var float d_sl      = na
+var float d_prev_sh = na
+var float d_prev_sl = na
+var int   d_struct  = 0
+var float d_induce  = na   // nearest inducement level
+
+bool d_new_sh = not na(d_ph_raw) and d_ph_raw != d_sh
+bool d_new_sl = not na(d_pl_raw) and d_pl_raw != d_sl
+
+if d_new_sh
+    d_prev_sh := d_sh
+    d_sh      := d_ph_raw
+if d_new_sl
+    d_prev_sl := d_sl
+    d_sl      := d_pl_raw
+
+bool d_hh = not na(d_sh) and not na(d_prev_sh) and d_sh > d_prev_sh
+bool d_hl = not na(d_sl) and not na(d_prev_sl) and d_sl > d_prev_sl
+bool d_ll = not na(d_sl) and not na(d_prev_sl) and d_sl < d_prev_sl
+bool d_lh = not na(d_sh) and not na(d_prev_sh) and d_sh < d_prev_sh
+
+if d_hh and d_hl
+    d_struct := 1
+else if d_ll and d_lh
+    d_struct := -1
+
+// Inducement: nearest unswept swing on the opposite side of bias
+if w_bias == 1 and not na(d_sh)
+    d_induce := d_sh
+else if w_bias == -1 and not na(d_sl)
+    d_induce := d_sl
+
+// Order Block arrays
+var array<float> ob_top    = array.new_float(0)
+var array<float> ob_bot    = array.new_float(0)
+var array<int>   ob_dir    = array.new_int(0)
+var array<bool>  ob_active = array.new_bool(0)
+var array<box>   ob_bx     = array.new<box>(0)
+
+f_push_ob(float top, float bot, int dir) =>
+    bx = i_show_ob ? box.new(bar_index - 1, top, bar_index + 50, bot,
+             bgcolor      = dir == 1 ? color.new(color.green, 75) : color.new(color.red, 75),
+             border_color = dir == 1 ? color.new(color.green, 30) : color.new(color.red, 30),
+             border_width = 1) : na
+    array.push(ob_top,    top)
+    array.push(ob_bot,    bot)
+    array.push(ob_dir,    dir)
+    array.push(ob_active, true)
+    array.push(ob_bx,     bx)
+    if array.size(ob_top) > i_max_ob
+        array.shift(ob_top)
+        array.shift(ob_bot)
+        array.shift(ob_dir)
+        array.shift(ob_active)
+        old = array.shift(ob_bx)
+        if not na(old)
+            box.delete(old)
+
+// Detect OB on each new daily bar:
+// Bullish OB = bearish candle (d3) before 3-candle bullish impulse (d2, d1, d0 all bullish)
+// Bearish OB = bullish candle (d3) before 3-candle bearish impulse
+if new_d_bar
+    bool three_bull = d_c0 > d_o0 and d_c1 > d_o1 and d_c2 > d_o2
+    bool three_bear = d_c0 < d_o0 and d_c1 < d_o1 and d_c2 < d_o2
+    bool ob_candle_bear = d_c3 < d_o3   // bearish preceding candle → bullish OB
+    bool ob_candle_bull = d_c3 > d_o3   // bullish preceding candle → bearish OB
+
+    if three_bull and ob_candle_bear
+        f_push_ob(d_o3, d_c3, 1)        // bullish OB: body of the bearish candle
+    else if three_bear and ob_candle_bull
+        f_push_ob(d_c3, d_o3, -1)       // bearish OB: body of the bullish candle
+
+// Update OB boxes + mitigation check
+var bool  ob_tapped  = false
+var float ob_tap_top = na
+var float ob_tap_bot = na
+var int   ob_tap_dir = 0
+
+ob_tapped := false
+if array.size(ob_top) > 0
+    for i = array.size(ob_top) - 1 to 0
+        if array.get(ob_active, i)
+            t  = array.get(ob_top, i)
+            b  = array.get(ob_bot, i)
+            d  = array.get(ob_dir, i)
+            bx = array.get(ob_bx, i)
+            if i_show_ob and not na(bx)
+                box.set_right(bx, bar_index + 10)
+            // Mitigation
+            if (d == 1 and close < b) or (d == -1 and close > t)
+                array.set(ob_active, i, false)
+                if i_show_ob and not na(bx)
+                    box.set_bgcolor(bx, color.new(color.gray, 90))
+                    box.set_border_color(bx, color.new(color.gray, 60))
+            // Tapped (1H price entered the OB zone)
+            else if (d == 1 and low <= t and low >= b and d == w_bias) or
+                    (d == -1 and high >= b and high <= t and d == w_bias)
+                ob_tapped  := true
+                ob_tap_top := t
+                ob_tap_bot := b
+                ob_tap_dir := d
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 6: 4H CONFIRMATION
+// ══════════════════════════════════════════════════════════════════════════════
+float h4_range_high = ta.highest(h4_h, i_h4_lb)
+float h4_range_low  = ta.lowest(h4_l,  i_h4_lb)
+float h4_mid        = (h4_range_high + h4_range_low) / 2
+
+int h4_conf = h4_c > h4_mid and w_bias == 1  ? 1  :
+              h4_c < h4_mid and w_bias == -1 ? -1 : 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 7: 1H INTENT CANDLES
+// ══════════════════════════════════════════════════════════════════════════════
+float atr14       = ta.atr(i_atr_period)
+bool  intent_bull = (close - open) > i_intent_mult * atr14 and close > open
+bool  intent_bear = (open - close) > i_intent_mult * atr14 and close < open
+
+// Intent must be near a tapped OB
+bool h1_bull_intent = intent_bull and ob_tapped and ob_tap_dir == 1
+bool h1_bear_intent = intent_bear and ob_tapped and ob_tap_dir == -1
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 8: M5 LIQUIDITY SWEEP
+// ══════════════════════════════════════════════════════════════════════════════
+var float m5_sl_tracked = na
+var float m5_sh_tracked = na
+var bool  m5_bull_sweep = false
+var bool  m5_bear_sweep = false
+
+if not na(m5_pl_raw) and m5_pl_raw != m5_sl_tracked
+    m5_sl_tracked := m5_pl_raw
+if not na(m5_ph_raw) and m5_ph_raw != m5_sh_tracked
+    m5_sh_tracked := m5_ph_raw
+
+// Reset sweep flags on each new 1H bar
+if barstate.isnew
+    m5_bull_sweep := false
+    m5_bear_sweep := false
+
+if not na(m5_sl_tracked) and m5_l < m5_sl_tracked and m5_c > m5_sl_tracked
+    m5_bull_sweep := true
+if not na(m5_sh_tracked) and m5_h > m5_sh_tracked and m5_c < m5_sh_tracked
+    m5_bear_sweep := true
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 9: SESSION FILTER
+// ══════════════════════════════════════════════════════════════════════════════
+f_in_session() =>
+    h = hour(time,   "UTC")
+    m = minute(time, "UTC")
+    t = h * 60 + m
+    lon_open  = i_lon_open_h  * 60 + i_lon_open_m
+    lon_close = i_lon_close_h * 60 + i_lon_close_m
+    ny_open   = i_ny_open_h   * 60 + i_ny_open_m
+    ny_close  = i_ny_close_h  * 60 + i_ny_close_m
+    (t >= lon_open and t < lon_close) or (t >= ny_open and t < ny_close)
+
+bool session_ok = not i_use_session or f_in_session()
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 10: ENTRY / EXIT LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+var float ep_sl  = na
+var float ep_tp  = na
+float sl_buf     = i_sl_buf * syminfo.mintick
+
+bool long_signal  = w_bias == 1  and d_struct == 1  and ob_tapped and ob_tap_dir == 1  and
+                    h4_conf == 1  and h1_bull_intent and m5_bull_sweep and session_ok and
+                    strategy.position_size == 0
+
+bool short_signal = w_bias == -1 and d_struct == -1 and ob_tapped and ob_tap_dir == -1 and
+                    h4_conf == -1 and h1_bear_intent and m5_bear_sweep and session_ok and
+                    strategy.position_size == 0
+
+if long_signal
+    ep_sl := ob_tap_bot - sl_buf
+    ep_tp := not na(d_induce) ? d_induce : close + 2.0 * (close - ep_sl)
+    strategy.entry("Long",  strategy.long,  qty=1, comment="MTF Long")
+    strategy.exit("Exit L", from_entry="Long",  stop=ep_sl, limit=ep_tp)
+
+if short_signal
+    ep_sl := ob_tap_top + sl_buf
+    ep_tp := not na(d_induce) ? d_induce : close - 2.0 * (ep_sl - close)
+    strategy.entry("Short", strategy.short, qty=1, comment="MTF Short")
+    strategy.exit("Exit S", from_entry="Short", stop=ep_sl, limit=ep_tp)
+
+if strategy.position_size == 0
+    ep_sl := na
+    ep_tp := na
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 11: VISUALS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Weekly swing lines
+var line ln_wsh = na
+var line ln_wsl = na
+if i_show_w and barstate.islast
+    line.delete(ln_wsh)
+    line.delete(ln_wsl)
+    if not na(w_sh)
+        ln_wsh := line.new(bar_index - 100, w_sh, bar_index + 30, w_sh,
+                           color=color.new(color.red, 30), width=1,
+                           style=line.style_dotted, extend=extend.right)
+    if not na(w_sl)
+        ln_wsl := line.new(bar_index - 100, w_sl, bar_index + 30, w_sl,
+                           color=color.new(color.green, 30), width=1,
+                           style=line.style_dotted, extend=extend.right)
+
+plotshape(i_show_w and w_new_sh, "W Swing High",
+          shape.triangledown, location.abovebar, color.new(color.red,   10), size=size.small)
+plotshape(i_show_w and w_new_sl, "W Swing Low",
+          shape.triangleup,   location.belowbar, color.new(color.green, 10), size=size.small)
+
+// 4H range lines
+var line ln_h4h = na
+var line ln_h4l = na
+var line ln_h4m = na
+if i_show_h4 and barstate.islast
+    line.delete(ln_h4h)
+    line.delete(ln_h4l)
+    line.delete(ln_h4m)
+    ln_h4h := line.new(bar_index - 20, h4_range_high, bar_index + 20, h4_range_high,
+                       color=color.new(color.orange, 40), width=1, style=line.style_dashed)
+    ln_h4l := line.new(bar_index - 20, h4_range_low,  bar_index + 20, h4_range_low,
+                       color=color.new(color.orange, 40), width=1, style=line.style_dashed)
+    ln_h4m := line.new(bar_index - 20, h4_mid,        bar_index + 20, h4_mid,
+                       color=color.new(color.gray,   60), width=1, style=line.style_dotted)
+
+// Session background
+bool in_london = f_in_session() and
+                 (hour(time, "UTC") * 60 + minute(time, "UTC")) < (i_ny_open_h * 60 + i_ny_open_m)
+bool in_ny     = f_in_session() and
+                 (hour(time, "UTC") * 60 + minute(time, "UTC")) >= (i_ny_open_h * 60 + i_ny_open_m)
+bgcolor(i_show_ses and in_london ? color.new(color.blue,   94) : na, title="London Session")
+bgcolor(i_show_ses and in_ny     ? color.new(color.orange, 94) : na, title="NY Session")
+
+// Entry signals
+plotshape(long_signal,  "Long Signal",  shape.arrowup,   location.belowbar, color.lime,  size=size.normal)
+plotshape(short_signal, "Short Signal", shape.arrowdown, location.abovebar, color.red,   size=size.normal)
+
+// Active trade SL/TP lines
+var line ln_sl = na
+var line ln_tp = na
+if strategy.position_size != 0 and not na(ep_sl) and barstate.isnew
+    line.delete(ln_sl)
+    line.delete(ln_tp)
+    ln_sl := line.new(bar_index, ep_sl, bar_index + 50, ep_sl,
+                      color=color.red,  width=2, style=line.style_solid)
+    ln_tp := line.new(bar_index, ep_tp, bar_index + 50, ep_tp,
+                      color=color.lime, width=2, style=line.style_dashed)
+if strategy.position_size == 0
+    line.delete(ln_sl)
+    line.delete(ln_tp)
+
+// Info table
+if i_show_table and barstate.islast
+    var table tbl = table.new(position.bottom_right, 2, 8,
+                              bgcolor=color.new(color.black, 65),
+                              border_color=color.new(color.gray, 50),
+                              border_width=1, frame_width=1,
+                              frame_color=color.new(color.gray, 50))
+    w_txt  = w_bias  ==  1 ? "BULLISH ▲" : w_bias  == -1 ? "BEARISH ▼" : "NEUTRAL —"
+    w_col  = w_bias  ==  1 ? color.lime   : w_bias  == -1 ? color.red    : color.gray
+    ds_txt = d_struct == 1 ? "Bullish HH/HL" : d_struct == -1 ? "Bearish LH/LL" : "No Structure"
+    ds_col = d_struct == 1 ? color.lime       : d_struct == -1 ? color.red        : color.gray
+    h4_txt = h4_conf  == 1 ? "Bullish ▲" : h4_conf  == -1 ? "Bearish ▼" : "Neutral —"
+    h4_col = h4_conf  == 1 ? color.lime   : h4_conf  == -1 ? color.red    : color.gray
+    ob_txt = ob_tapped ? "✓ Tapped (" + (ob_tap_dir == 1 ? "Bull" : "Bear") + ")" : "Watching"
+    ob_col = ob_tapped ? color.lime : color.gray
+    m5_txt = (m5_bull_sweep or m5_bear_sweep) ? "✓ Swept" : "Waiting"
+    m5_col = (m5_bull_sweep or m5_bear_sweep) ? color.lime : color.gray
+    ses_txt= session_ok ? "✓ Active" : "Closed"
+    ses_col= session_ok ? color.lime  : color.gray
+    pos_txt= strategy.position_size > 0 ? "Long ▲" : strategy.position_size < 0 ? "Short ▼" : "Flat"
+    pos_col= strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red : color.gray
+
+    table.cell(tbl, 0, 0, "MTF ICT/SMC",     text_color=color.white,  bgcolor=color.new(color.navy, 20), text_size=size.small)
+    table.cell(tbl, 1, 0, "1H | Forex",      text_color=color.silver, bgcolor=color.new(color.navy, 20), text_size=size.small)
+    table.cell(tbl, 0, 1, "Weekly Bias",      text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 1, w_txt,              text_color=w_col,        text_size=size.small)
+    table.cell(tbl, 0, 2, "Daily Structure",  text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 2, ds_txt,             text_color=ds_col,       text_size=size.small)
+    table.cell(tbl, 0, 3, "4H Confirm",       text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 3, h4_txt,             text_color=h4_col,       text_size=size.small)
+    table.cell(tbl, 0, 4, "Daily OB",         text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 4, ob_txt,             text_color=ob_col,       text_size=size.small)
+    table.cell(tbl, 0, 5, "M5 Sweep",         text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 5, m5_txt,             text_color=m5_col,       text_size=size.small)
+    table.cell(tbl, 0, 6, "Session",          text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 6, ses_txt,            text_color=ses_col,      text_size=size.small)
+    table.cell(tbl, 0, 7, "Position",         text_color=color.silver, text_size=size.small)
+    table.cell(tbl, 1, 7, pos_txt,            text_color=pos_col,      text_size=size.small)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 12: ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+alertcondition(long_signal,
+    title="MTF Long Signal",
+    message="MTF ICT/SMC: All conditions met — LONG signal fired. Weekly bullish, Daily OB tapped, 4H confirmed, M5 sweep done.")
+
+alertcondition(short_signal,
+    title="MTF Short Signal",
+    message="MTF ICT/SMC: All conditions met — SHORT signal fired. Weekly bearish, Daily OB tapped, 4H confirmed, M5 sweep done.")
+
+alertcondition(ob_tapped and not (long_signal or short_signal),
+    title="Daily OB Tapped (Pre-Confirmation)",
+    message="MTF ICT/SMC: Price tapped a Daily Order Block. Waiting for 1H intent + M5 sweep confirmation.")
+
+alertcondition(strategy.position_size != 0 and
+               ((strategy.position_size > 0 and low <= ep_sl) or
+                (strategy.position_size < 0 and high >= ep_sl)),
+    title="Stop Loss Hit",
+    message="MTF ICT/SMC: Stop loss triggered.")
+
+alertcondition(strategy.position_size != 0 and
+               ((strategy.position_size > 0 and high >= ep_tp) or
+                (strategy.position_size < 0 and low <= ep_tp)),
+    title="Take Profit Hit",
+    message="MTF ICT/SMC: Take profit reached.")
