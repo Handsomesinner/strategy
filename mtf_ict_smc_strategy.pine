@@ -384,7 +384,7 @@ if strategy.position_size == 0
 
 // Info table
 if i_show_table and barstate.islast
-    var table tbl = table.new(position.top_right, 2, 8,
+    var table tbl = table.new(position.top_left, 2, 8,
                               bgcolor=color.new(color.black, 65),
                               border_color=color.new(color.gray, 50),
                               border_width=1, frame_width=1,
