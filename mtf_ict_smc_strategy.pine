@@ -26,6 +26,7 @@ grp_1h  = "1H Settings"
 i_atr_period    = input.int(14,   "ATR Period",               minval=5, maxval=50,           group=grp_1h)
 i_intent_mult   = input.float(0.8,"Intent Candle ATR Mult",   minval=0.2, maxval=3.0, step=0.1, group=grp_1h)
 i_sl_buf        = input.int(5,    "SL Buffer (ticks)",        minval=0, maxval=50,            group=grp_1h)
+i_use_m5_sweep  = input.bool(false,"Require M5 Liquidity Sweep (strict)",                    group=grp_1h)
 
 grp_ses = "Session Filter (UTC)"
 i_use_session   = input.bool(true, "Use Session Filter",                                     group=grp_ses)
@@ -192,18 +193,21 @@ f_push_ob(float top, float bot, int dir) =>
             box.delete(old)
 
 // Detect OB on each new daily bar:
-// Bullish OB = bearish candle (d3) before 3-candle bullish impulse (d2, d1, d0 all bullish)
-// Bearish OB = bullish candle (d3) before 3-candle bearish impulse
+// Bullish OB = last bearish daily candle (d1) directly before a bullish impulse (d0 bullish + range expansion)
+// Bearish OB = last bullish daily candle (d1) directly before a bearish impulse (d0 bearish + range expansion)
 if new_d_bar
-    bool three_bull = d_c0 > d_o0 and d_c1 > d_o1 and d_c2 > d_o2
-    bool three_bear = d_c0 < d_o0 and d_c1 < d_o1 and d_c2 < d_o2
-    bool ob_candle_bear = d_c3 < d_o3   // bearish preceding candle → bullish OB
-    bool ob_candle_bull = d_c3 > d_o3   // bullish preceding candle → bearish OB
+    float d_atr = math.abs(d_h0 - d_l0)   // range of yesterday's candle
+    float d_avg = (math.abs(d_h1 - d_l1) + math.abs(d_h2 - d_l2)) / 2  // avg range of prior 2 candles
 
-    if three_bull and ob_candle_bear
-        f_push_ob(d_o3, d_c3, 1)        // bullish OB: body of the bearish candle
-    else if three_bear and ob_candle_bull
-        f_push_ob(d_c3, d_o3, -1)       // bearish OB: body of the bullish candle
+    bool bull_impulse = d_c0 > d_o0 and d_atr > d_avg * 0.8  // bullish expanded candle
+    bool bear_impulse = d_c0 < d_o0 and d_atr > d_avg * 0.8  // bearish expanded candle
+    bool ob_bear_candle = d_c1 < d_o1  // preceding bearish candle → bullish OB
+    bool ob_bull_candle = d_c1 > d_o1  // preceding bullish candle → bearish OB
+
+    if bull_impulse and ob_bear_candle
+        f_push_ob(d_o1, d_c1, 1)       // bullish OB: body of the preceding bearish candle
+    else if bear_impulse and ob_bull_candle
+        f_push_ob(d_c1, d_o1, -1)      // bearish OB: body of the preceding bullish candle
 
 // Update OB boxes + mitigation check
 var bool  ob_tapped  = false
@@ -268,15 +272,19 @@ if not na(m5_pl_raw) and m5_pl_raw != m5_sl_tracked
 if not na(m5_ph_raw) and m5_ph_raw != m5_sh_tracked
     m5_sh_tracked := m5_ph_raw
 
-// Reset sweep flags on each new 1H bar
-if barstate.isnew
-    m5_bull_sweep := false
-    m5_bear_sweep := false
-
+// Set sweep flag — persists until a trade is taken or bias flips
 if not na(m5_sl_tracked) and m5_l < m5_sl_tracked and m5_c > m5_sl_tracked
     m5_bull_sweep := true
 if not na(m5_sh_tracked) and m5_h > m5_sh_tracked and m5_c < m5_sh_tracked
     m5_bear_sweep := true
+// Reset when trade fires or weekly bias flips
+if strategy.position_size != 0 or w_bias == 0
+    m5_bull_sweep := false
+    m5_bear_sweep := false
+
+// When M5 sweep filter is disabled, treat it as always satisfied
+bool m5_ok_bull = not i_use_m5_sweep or m5_bull_sweep
+bool m5_ok_bear = not i_use_m5_sweep or m5_bear_sweep
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 9: SESSION FILTER
@@ -300,9 +308,9 @@ var float ep_sl  = na
 var float ep_tp  = na
 float sl_buf     = i_sl_buf * syminfo.mintick
 
-bool long_signal  = w_bias == 1  and d_struct == 1  and ob_tapped and ob_tap_dir == 1  and h4_conf == 1  and h1_bull_intent and m5_bull_sweep and session_ok and strategy.position_size == 0
+bool long_signal  = w_bias == 1  and d_struct == 1  and ob_tapped and ob_tap_dir == 1  and h4_conf == 1  and h1_bull_intent and m5_ok_bull and session_ok and strategy.position_size == 0
 
-bool short_signal = w_bias == -1 and d_struct == -1 and ob_tapped and ob_tap_dir == -1 and h4_conf == -1 and h1_bear_intent and m5_bear_sweep and session_ok and strategy.position_size == 0
+bool short_signal = w_bias == -1 and d_struct == -1 and ob_tapped and ob_tap_dir == -1 and h4_conf == -1 and h1_bear_intent and m5_ok_bear and session_ok and strategy.position_size == 0
 
 if long_signal
     ep_sl := ob_tap_bot - sl_buf
@@ -398,8 +406,8 @@ if i_show_table and barstate.islast
     h4_col = h4_conf  == 1 ? color.lime   : h4_conf  == -1 ? color.red    : color.gray
     ob_txt = ob_tapped ? "✓ Tapped (" + (ob_tap_dir == 1 ? "Bull" : "Bear") + ")" : "Watching"
     ob_col = ob_tapped ? color.lime : color.gray
-    m5_txt = (m5_bull_sweep or m5_bear_sweep) ? "✓ Swept" : "Waiting"
-    m5_col = (m5_bull_sweep or m5_bear_sweep) ? color.lime : color.gray
+    m5_txt = not i_use_m5_sweep ? "Disabled (off)" : (m5_bull_sweep or m5_bear_sweep) ? "✓ Swept" : "Waiting"
+    m5_col = not i_use_m5_sweep ? color.yellow : (m5_bull_sweep or m5_bear_sweep) ? color.lime : color.gray
     ses_txt= session_ok ? "✓ Active" : "Closed"
     ses_col= session_ok ? color.lime  : color.gray
     pos_txt= strategy.position_size > 0 ? "Long ▲" : strategy.position_size < 0 ? "Short ▼" : "Flat"
