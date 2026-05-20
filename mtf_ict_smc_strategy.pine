@@ -1,5 +1,5 @@
 //@version=6
-strategy("MTF ICT/SMC Strategy [1H]", overlay=true,
+strategy("MTF ICT/SMC Strategy", overlay=true,
          initial_capital=100000,
          default_qty_type=strategy.fixed,
          default_qty_value=1,
@@ -46,10 +46,11 @@ i_show_ses      = input.bool(true, "Show Session Background",                   
 i_show_table    = input.bool(true, "Show Info Table",                                        group=grp_vis)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SECTION 2: TIMEFRAME GUARD
+// SECTION 2: TIMEFRAME NOTE
 // ══════════════════════════════════════════════════════════════════════════════
-if timeframe.period != "60"
-    runtime.error("Run this strategy on a 1-Hour (60m) chart.")
+// Works on any timeframe (M5, M15, M30, 1H, 4H, etc.)
+// Higher timeframe data (Weekly, Daily, 4H, M5) is always fetched via
+// request.security regardless of the current chart timeframe.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 3: MULTI-TF DATA FETCH (confirmed bars — no repainting)
@@ -404,8 +405,8 @@ if i_show_table and barstate.islast
     pos_txt= strategy.position_size > 0 ? "Long ▲" : strategy.position_size < 0 ? "Short ▼" : "Flat"
     pos_col= strategy.position_size > 0 ? color.lime : strategy.position_size < 0 ? color.red : color.gray
 
-    table.cell(tbl, 0, 0, "MTF ICT/SMC",     text_color=color.white,  bgcolor=color.new(color.navy, 20), text_size=size.small)
-    table.cell(tbl, 1, 0, "1H | Forex",      text_color=color.silver, bgcolor=color.new(color.navy, 20), text_size=size.small)
+    table.cell(tbl, 0, 0, "MTF ICT/SMC",                        text_color=color.white,  bgcolor=color.new(color.navy, 20), text_size=size.small)
+    table.cell(tbl, 1, 0, timeframe.period + "m | Forex",      text_color=color.silver, bgcolor=color.new(color.navy, 20), text_size=size.small)
     table.cell(tbl, 0, 1, "Weekly Bias",      text_color=color.silver, text_size=size.small)
     table.cell(tbl, 1, 1, w_txt,              text_color=w_col,        text_size=size.small)
     table.cell(tbl, 0, 2, "Daily Structure",  text_color=color.silver, text_size=size.small)

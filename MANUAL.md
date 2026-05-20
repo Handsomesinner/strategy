@@ -15,7 +15,7 @@ It runs on **TradingView** and works on **any Forex pair** (EURUSD, GBPUSD, USDJ
 | Item | Requirement |
 |---|---|
 | Platform | TradingView (free or paid) |
-| Chart Timeframe | **1-Hour (1H) only** |
+| Chart Timeframe | Any — M5, M15, M30, 1H, 4H recommended |
 | Market | Forex (any pair), Indices, Crypto |
 | Pine Script Version | v6 |
 
@@ -224,8 +224,8 @@ The M5 sweep uses confirmed closed bars. If the current 1H bar is still forming,
 **The strategy isn't taking trades. Is it broken?**
 No — this is by design. The strategy only enters when all 6 conditions align simultaneously. This is intentional to reduce low-quality setups. A quiet period with no signals is normal and healthy.
 
-**Can I use this on a 4H or Daily chart?**
-No. The script enforces the 1H timeframe and will show an error on any other timeframe. This is because the M5 confirmation logic is calibrated for 1H chart execution.
+**Can I use this on other timeframes?**
+Yes. The strategy works on M5, M15, M30, 1H, and 4H charts. The Weekly, Daily, 4H, and M5 reference data is always fetched automatically regardless of the chart timeframe. The info table will show your current timeframe in the header.
 
 ---
 
